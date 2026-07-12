@@ -149,8 +149,11 @@ impl Default for WidgetKind {
 
 /// Mirrors Bevy's `Val` enum. A discriminated length value: pixels
 /// (canvas-space), percent of the parent's content box, or `Auto`.
+///
+/// On-disk spelling is `PascalCase` (`Px`, `Percent`, `Auto`) — the
+/// form the original editor fixtures ship in. If you change this,
+/// either rewrite every existing fixture or add a migration arm.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum Val {
     Px(f32),
     Percent(f32),
