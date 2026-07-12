@@ -1,0 +1,21 @@
+[package]
+name = "beui-protocol"
+version = "0.3.0"
+edition = "2021"
+authors = ["Bluze"]
+license = "MIT OR Apache-2.0"
+description = "The .beui file protocol: a canonical schema, version handshake, and read/write API shared by the bevy-ui-editor and any external Bevy project that needs to author, load, or regenerate .beui files."
+repository = "https://github.com/bluzeocean/beui-protocol"
+readme = "PROTOCOL.md"
+keywords = ["ui", "ron", "bevy", "schema", "protocol"]
+categories = ["data-structures", "encoding", "game-development"]
+rust-version = "1.75"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+thiserror = "1"
+
+[dev-dependencies]
+# Examples use std only; no extra deps needed. Add tempfile here if the
+# test suite grows.
