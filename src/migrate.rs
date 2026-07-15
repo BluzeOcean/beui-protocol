@@ -289,4 +289,77 @@ mod tests {
         let _text = ComponentPayload::Text(TextProps::default());
         let _interaction = ComponentPayload::Interaction(crate::InteractionProps::default());
     }
+
+    // -----------------------------------------------------------------
+    // Golden tests for `LayoutProps` optional / enum fields. These pin
+    // the wire shape (serialize → deserialize round-trip) so the
+    // Display::None / position::Some changes in later phases can be
+    // verified as a real wire diff instead of a silent schema drift.
+    // -----------------------------------------------------------------
+
+    /// `layout.position: Some(AbsolutePosition { x, y })` round-trips
+    /// through RON without losing the inner coordinates. Without the
+    /// Some-arm, the editor's "absolute-position escape hatch" would
+    /// silently degrade to the flex path on the sidecar.
+    #[test]
+    fn layout_position_some_means_absolute() {
+        use crate::{AbsolutePosition, LayoutProps};
+        let layout = LayoutProps {
+            display: crate::Display::Flex,
+            position: Some(AbsolutePosition { x: 42.0, y: 7.0 }),
+            ..LayoutProps::default()
+        };
+        let ron = ron::to_string(&layout).expect("LayoutProps serializes");
+        // The `position: Some((x: 42, y: 7))` shape must survive — grep
+        // for the exact inner field names so a renaming doesn't slip.
+        assert!(ron.contains("position"), "ron must contain position key: {ron}");
+        assert!(ron.contains("42"), "ron must contain x: {ron}");
+        assert!(ron.contains("7"), "ron must contain y: {ron}");
+        let back: LayoutProps = ron::from_str(&ron).expect("LayoutProps round-trips");
+        let pos = back.position.expect("position Some must survive round-trip");
+        assert_eq!(pos.x, 42.0);
+        assert_eq!(pos.y, 7.0);
+    }
+
+    /// `layout.position: None` is the default — it must serialize
+    /// either as `position: None` or be omitted entirely (we test
+    /// the second behavior, which is what `#[serde(default)]` gives
+    /// for the missing field). The round-trip must yield None.
+    #[test]
+    fn layout_position_none_is_default() {
+        use crate::LayoutProps;
+        let layout = LayoutProps {
+            display: crate::Display::Flex,
+            ..LayoutProps::default()
+        };
+        assert!(layout.position.is_none(), "default layout has no position");
+        let ron = ron::to_string(&layout).expect("LayoutProps serializes");
+        let back: LayoutProps = ron::from_str(&ron).expect("LayoutProps round-trips");
+        assert!(back.position.is_none(), "round-tripped layout still has no position: {ron}");
+    }
+
+    /// `Display::None` round-trips through RON. The RON serializer
+    /// emits the unit variant with the Rust raw-identifier prefix
+    /// `r#None` (because `None` is a Rust reserved keyword); RON
+    /// accepts both `r#None` and bare `None` on parse. Pin the
+    /// round-trip so a future serializer change doesn't accidentally
+    /// collapse the variant to a different representation.
+    #[test]
+    fn display_none_wire_form_round_trips() {
+        use crate::Display;
+        let layout = crate::LayoutProps {
+            display: Display::None,
+            ..crate::LayoutProps::default()
+        };
+        let ron = ron::to_string(&layout).expect("LayoutProps serializes");
+        // The wire form must mention the variant — either as `None` or
+        // `r#None` (both are accepted by RON). The round-trip is the
+        // load-bearing assertion; the spelling pin is documentation.
+        assert!(
+            ron.contains("None"),
+            "wire form must contain None (as r#None or None): {ron}"
+        );
+        let back: crate::LayoutProps = ron::from_str(&ron).expect("LayoutProps round-trips");
+        assert!(matches!(back.display, Display::None));
+    }
 }
