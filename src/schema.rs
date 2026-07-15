@@ -124,13 +124,27 @@ pub struct WidgetNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum WidgetKind {
+    /// A generic container with no rendering of its own. Used as a
+    /// layout/div node; carries `transform` + `style` and (optionally)
+    /// `layout` to lay out children.
     Container,
+    /// A text-rendering widget. MUST carry a `text` component
+    /// (enforced by `validate`).
     Text,
+    /// An image-rendering widget. MUST carry an `image` component
+    /// (enforced by `validate`).
     Image,
+    /// A clickable button. Carries a `text` component for its label
+    /// and an `interaction` component for the click handler.
     Button,
+    /// A text-input field. Renders as a text field with a caret.
     TextInput,
+    /// A checkable toggle. Carries an `interaction` component.
     Checkbox,
+    /// A scrollable container. Children are clipped to the visible
+    /// region; the consumer handles scroll input.
     ScrollView,
+    /// A progress bar. Renders a fill bar over a track.
     ProgressBar,
     /// Reference to another `.beui` file. Carries an `include`
     /// component; children are ignored at load time.
@@ -155,18 +169,25 @@ impl Default for WidgetKind {
 /// either rewrite every existing fixture or add a migration arm.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Val {
+    /// Length in canvas-space pixels. Absolute regardless of parent size.
     Px(f32),
+    /// Length as a percentage of the parent's content box. `0.0` is
+    /// none, `100.0` fills the box, `>100.0` overflows.
     Percent(f32),
+    /// Length determined by the content (or the consumer's default).
     Auto,
 }
 
 impl Val {
+    /// Construct a `Val::Px`.
     pub const fn px(v: f32) -> Self {
         Val::Px(v)
     }
+    /// Construct a `Val::Percent`.
     pub const fn pct(v: f32) -> Self {
         Val::Percent(v)
     }
+    /// Construct a `Val::Auto`.
     pub const fn auto() -> Self {
         Val::Auto
     }
@@ -182,15 +203,21 @@ impl Default for Val {
 // Position / Size / Scale / Flip
 // ---------------------------------------------------------------------------
 
+/// X/Y position in the parent's coordinate space, using `Val` units.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct PositionVal {
+    /// Horizontal position.
     pub x: Val,
+    /// Vertical position.
     pub y: Val,
 }
 
+/// Width/height of the widget, using `Val` units.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SizeVal {
+    /// Width.
     pub width: Val,
+    /// Height.
     pub height: Val,
 }
 
@@ -203,9 +230,13 @@ impl Default for SizeVal {
     }
 }
 
+/// Scale factors applied to the widget's rendered content. `1.0` is
+/// identity; `2.0` doubles; `0.0` collapses the widget.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Scale {
+    /// Horizontal scale factor.
     pub x: f32,
+    /// Vertical scale factor.
     pub y: f32,
 }
 
@@ -215,9 +246,13 @@ impl Default for Scale {
     }
 }
 
+/// Axis-mirror flags applied to the widget's content (image flip,
+/// layout direction reversal). Editor-only metadata today.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Flip {
+    /// Flip horizontally.
     pub x: bool,
+    /// Flip vertically.
     pub y: bool,
 }
 
@@ -230,9 +265,13 @@ pub struct Flip {
 /// transparent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Color {
+    /// Red channel, 0-255.
     pub r: u8,
+    /// Green channel, 0-255.
     pub g: u8,
+    /// Blue channel, 0-255.
     pub b: u8,
+    /// Alpha channel, 0=transparent, 255=opaque.
     pub a: u8,
 }
 
@@ -283,12 +322,19 @@ impl Color {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "lowercase")]
 pub enum ComponentPayload {
+    /// Position + size + rotation + scale + flip.
     Transform(TransformProps),
+    /// Background fill, border, corner radius.
     Style(StyleProps),
+    /// Flex container layout (display, direction, gap, padding, ...).
     Layout(LayoutProps),
+    /// Text content + style.
     Text(TextProps),
+    /// Image path + tint + fit + slice.
     Image(ImageProps),
+    /// User-interaction wiring (callbacks + pickability flags).
     Interaction(InteractionProps),
+    /// Include reference to another `.beui` file.
     Include(IncludeProps),
 }
 
@@ -312,18 +358,31 @@ impl ComponentPayload {
 // Transform Component (every widget carries one)
 // ---------------------------------------------------------------------------
 
-/// Position + size + rotation + scale + flip. Every widget in the tree
-/// MUST carry a `transform` component (enforced by `validate`).
+/// Position + size + rotation + scale + flip + z-order. Every widget in
+/// the tree MUST carry a `transform` component (enforced by `validate`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransformProps {
+    /// Position in the parent's coordinate space.
     pub position: PositionVal,
+    /// Width/height of the widget.
     pub size: SizeVal,
+    /// Rotation in radians (positive = counter-clockwise).
     #[serde(default)]
     pub rotation: f32,
+    /// Scale factors applied to the rendered content.
     #[serde(default)]
     pub scale: Scale,
+    /// Axis-mirror flags for the content.
     #[serde(default)]
     pub flip: Flip,
+    /// Painter's-algorithm stacking order within the parent's stack.
+    /// Higher values paint on top of siblings. `attachChild` in the editor
+    /// auto-bumps a child to `parent.z_index + 1` on attach when the child
+    /// would otherwise paint at or below the parent (a "child behind its
+    /// parent" footgun). Default 0 — the artboard root sits at z=0, so
+    /// freshly-dropped widgets paint one layer above the artboard frame.
+    #[serde(default)]
+    pub z_index: i32,
 }
 
 impl Default for TransformProps {
@@ -337,6 +396,7 @@ impl Default for TransformProps {
             rotation: 0.0,
             scale: Scale::default(),
             flip: Flip::default(),
+            z_index: 0,
         }
     }
 }
@@ -354,16 +414,23 @@ impl Default for TransformProps {
 /// `BackgroundColor` component entirely; same for borders.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct StyleProps {
+    /// Background fill color. Only rendered when `fill_enabled` is true.
     #[serde(default)]
     pub background: Color,
+    /// Border outline color. Only rendered when `border_enabled` is true.
     #[serde(default = "default_border_color")]
     pub border_color: Color,
+    /// Border outline width in pixels. Zero means no border rendered.
     #[serde(default)]
     pub border_width: f32,
+    /// Border corner radius in pixels.
     #[serde(default)]
     pub border_radius: f32,
+    /// Whether to render the background fill. Default `false` so
+    /// freshly-created widgets show no fill until the user opts in.
     #[serde(default)]
     pub fill_enabled: bool,
+    /// Whether to render the border. Default `false`.
     #[serde(default)]
     pub border_enabled: bool,
 }
@@ -396,24 +463,46 @@ impl Default for StyleProps {
 /// space).
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct LayoutProps {
+    /// Box model: flex or none.
     #[serde(default = "default_display")]
     pub display: Display,
+    /// Main axis direction.
     #[serde(default = "default_flex_direction")]
     pub flex_direction: FlexDirection,
+    /// Main-axis child alignment.
     #[serde(default)]
     pub justify_content: JustifyContent,
+    /// Cross-axis child alignment.
     #[serde(default)]
     pub align_items: AlignItems,
+    /// Gap between children in pixels.
     #[serde(default)]
     pub gap: f32,
+    /// Inner padding (top/right/bottom/left).
     #[serde(default)]
     pub padding: Padding,
+    /// Outer margin (top/right/bottom/left).
     #[serde(default)]
     pub margin: Margin,
+    /// Flex shrink factor. `1.0` (the default) matches Bevy 0.19's
+    /// taffy-backed `Node.flex_shrink` default. When a flex child
+    /// has `flex_shrink > 0` and the container's main-axis content
+    /// is too small to fit all children, taffy reduces the child's
+    /// main extent proportionally. A `0` disables shrinking (children
+    /// overflow the container instead of squishing).
+    ///
+    /// Phase 6 added this field; legacy assets without it parse to
+    /// `1.0` (Bevy-compatible default) via `#[serde(default)]`.
+    #[serde(default = "default_flex_shrink")]
+    pub flex_shrink: f32,
     /// Optional absolute position. When `Some`, the widget is laid out
     /// at the given offset in the parent's content box (ignores flex).
     #[serde(default)]
     pub position: Option<AbsolutePosition>,
+}
+
+fn default_flex_shrink() -> f32 {
+    1.0
 }
 
 fn default_display() -> Display {
@@ -423,64 +512,99 @@ fn default_flex_direction() -> FlexDirection {
     FlexDirection::Row
 }
 
+/// Box model: `Flex` lays out children according to flex rules; `None`
+/// hides the widget and skips its subtree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Display {
+    /// Flex container that lays out children.
     #[default]
     Flex,
+    /// Not rendered (display: none).
     None,
 }
 
+/// Main axis direction for a flex container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum FlexDirection {
+    /// Left to right.
     #[default]
     Row,
+    /// Top to bottom.
     Column,
+    /// Right to left.
     RowReverse,
+    /// Bottom to top.
     ColumnReverse,
 }
 
+/// Main-axis child alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum JustifyContent {
+    /// Pack children at the start of the main axis.
     #[default]
     FlexStart,
+    /// Pack children at the end of the main axis.
     FlexEnd,
+    /// Pack children at the center of the main axis.
     Center,
+    /// First child at the start, last at the end, rest evenly distributed.
     SpaceBetween,
+    /// Equal space around each child (half-gap at the edges).
     SpaceAround,
+    /// Equal space around each child (full gap at the edges).
     SpaceEvenly,
 }
 
+/// Cross-axis child alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum AlignItems {
+    /// Stretch children to fill the cross axis.
     #[default]
     Stretch,
+    /// Align children to the cross-axis start.
     FlexStart,
+    /// Align children to the cross-axis end.
     FlexEnd,
+    /// Align children to the cross-axis center.
     Center,
 }
 
+/// Inner padding in CSS shorthand: top/right/bottom/left, all in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Padding {
+    /// Top padding in pixels.
     pub top: f32,
+    /// Right padding in pixels.
     pub right: f32,
+    /// Bottom padding in pixels.
     pub bottom: f32,
+    /// Left padding in pixels.
     pub left: f32,
 }
 
+/// Outer margin in CSS shorthand: top/right/bottom/left, all in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Margin {
+    /// Top margin in pixels.
     pub top: f32,
+    /// Right margin in pixels.
     pub right: f32,
+    /// Bottom margin in pixels.
     pub bottom: f32,
+    /// Left margin in pixels.
     pub left: f32,
 }
 
+/// Absolute position override. When set on a `LayoutProps`, the widget
+/// is positioned at `(x, y)` in the parent's content box, ignoring flex.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct AbsolutePosition {
+    /// Horizontal offset from the parent's content-box origin, in pixels.
     pub x: f32,
+    /// Vertical offset from the parent's content-box origin, in pixels.
     pub y: f32,
 }
 
@@ -492,10 +616,14 @@ pub struct AbsolutePosition {
 /// in the Inspector; the Bevy spawner maps it to a `Text` component.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextProps {
+    /// The string to render.
     pub content: String,
+    /// Font size in points.
     pub font_size: f32,
+    /// Text alignment (left/center/right).
     #[serde(default)]
     pub align: TextAlign,
+    /// Text color.
     #[serde(default)]
     pub color: Color,
 }
@@ -511,12 +639,16 @@ impl Default for TextProps {
     }
 }
 
+/// Text alignment along the main axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextAlign {
+    /// Left-aligned (default for LTR text).
     #[default]
     Left,
+    /// Center-aligned.
     Center,
+    /// Right-aligned.
     Right,
 }
 
@@ -536,16 +668,22 @@ pub enum TextAlign {
 ///   variants onto its own image-mode API.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImageProps {
+    /// Consumer-relative image path. Empty string renders transparent.
     #[serde(default)]
     pub path: String,
+    /// Multiplicative tint color. Only applied when `tint_enabled` is true.
     #[serde(default = "default_image_tint")]
     pub tint: Color,
+    /// Whether to apply the tint. Default `false` (identity pass-through).
     #[serde(default)]
     pub tint_enabled: bool,
+    /// How the image fits its box.
     #[serde(default)]
     pub fit: ImageFit,
+    /// 9-patch slice insets (left/top/right/bottom).
     #[serde(default)]
     pub slice_insets: SliceInsets,
+    /// Whether to apply 9-patch slicing. Default `false`.
     #[serde(default)]
     pub slice_enabled: bool,
 }
@@ -567,10 +705,12 @@ impl Default for ImageProps {
     }
 }
 
+/// How an image is rendered into its box. The consumer maps these
+/// onto its own image-mode API (e.g. Bevy's `NodeImageMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFit {
-    /// Consumer default; aspect-distorting stretch.
+    /// Aspect-distorting stretch to fill the box.
     #[default]
     Stretch,
     /// Cover (fills box, may crop). Maps to consumer's cover mode.
@@ -582,11 +722,17 @@ pub enum ImageFit {
     Tile,
 }
 
+/// 9-patch slice insets: how far in from each edge the content
+/// region starts. All values in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct SliceInsets {
+    /// Left inset in pixels.
     pub left: f32,
+    /// Top inset in pixels.
     pub top: f32,
+    /// Right inset in pixels.
     pub right: f32,
+    /// Bottom inset in pixels.
     pub bottom: f32,
 }
 
@@ -603,8 +749,10 @@ pub struct InteractionProps {
     /// (typically looked up in a sidecar-side handler table).
     #[serde(default)]
     pub onclick: Option<String>,
+    /// Callback identifier for hover-enter events.
     #[serde(default)]
     pub onhover: Option<String>,
+    /// Callback identifier for focus events.
     #[serde(default)]
     pub onfocus: Option<String>,
     /// Whether pointer events reach this widget. Defaults to true so
