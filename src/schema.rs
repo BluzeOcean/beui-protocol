@@ -1,4 +1,4 @@
-//! Canonical `.beui` schema (protocol v3).
+//! Canonical `.beui` schema (protocol v3 on disk; v4 split applied here).
 //!
 //! This is the **single source of truth** for the `.beui` file format.
 //! Every producer and every consumer — the editor, the sidecar renderer,
@@ -43,6 +43,24 @@
 //! 5. Have every `Include` widget carry an `include` component.
 //! 6. Have every `Text` widget carry a `text` component.
 //! 7. Have `version == CURRENT_SCHEMA_VERSION` after migration.
+//!
+//! ## Layout split (in-progress, applied here in this file)
+//!
+//! The single `Layout(LayoutProps)` payload has been split into two
+//! independent payloads:
+//! - [`LayoutDownwardProps`] — "how this widget lays out its children"
+//!   (Type + flex direction + spacing + padding).
+//! - [`LayoutUpwardProps`] — "how this widget relates to its parent's
+//!   layout" (Inherit | Ignore).
+//!
+//! Hidden-ness is removed from layout entirely. `LayoutType::None` is
+//! a fully visible container; it does NOT hide the widget. Visibility
+//! lives in the editor's overrides store.
+//!
+//! The on-disk migration (v3 → v4) is implemented in `migrate` in a
+//! follow-up phase. Until that ships, the wire form is still v3 with
+//! the `layout` tag and the old `LayoutProps` shape; the schema module
+//! itself uses the new types.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -319,6 +337,21 @@ impl Color {
 /// Adding a new component = adding a variant here + a default-factory
 /// + the consumer-side mapping. The outer `WidgetNode` shape does not
 /// change.
+///
+/// ## Layout split (v4)
+///
+/// The single `Layout(LayoutProps)` variant split into:
+/// - `LayoutDownward(LayoutDownwardProps)` — describes how THIS widget
+///   lays out its children (Type + flex direction + spacing + padding).
+/// - `LayoutUpward(LayoutUpwardProps)` — describes how THIS widget
+///   relates to its parent's layout (Inherit the parent's flex flow
+///   or Ignore it / position absolutely).
+///
+/// See `beui_protocol::layout` for the reference functions that turn
+/// these payloads into Bevy `Node` configuration. Phase 3 (this layout
+/// redesign) removes hidden-ness from layout entirely — `Display::None`
+/// is never set from a `LayoutDownwardProps`; visibility is a separate
+/// concern owned by the editor's overrides store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "lowercase")]
 pub enum ComponentPayload {
@@ -326,8 +359,15 @@ pub enum ComponentPayload {
     Transform(TransformProps),
     /// Background fill, border, corner radius.
     Style(StyleProps),
-    /// Flex container layout (display, direction, gap, padding, ...).
-    Layout(LayoutProps),
+    /// Downward layout — how THIS widget lays out its children.
+    /// Serializes with tag `"layout_downward"` (see `type_tag`).
+    #[serde(rename = "layout_downward")]
+    LayoutDownward(LayoutDownwardProps),
+    /// Upward layout — how THIS widget positions itself relative to
+    /// the parent's flex flow (`Inherit` / `Ignore`). Serializes with
+    /// tag `"layout_upward"` (see `type_tag`).
+    #[serde(rename = "layout_upward")]
+    LayoutUpward(LayoutUpwardProps),
     /// Text content + style.
     Text(TextProps),
     /// Image path + tint + fit + slice.
@@ -336,6 +376,13 @@ pub enum ComponentPayload {
     Interaction(InteractionProps),
     /// Include reference to another `.beui` file.
     Include(IncludeProps),
+    /// Button label + face color. Lives on Button-kind widgets.
+    Button(ButtonProps),
+    /// Checkbox toggled state + accent color. Lives on Checkbox-kind widgets.
+    Checkbox(CheckboxProps),
+    /// Progress bar fill ratio + color + label visibility. Lives on
+    /// ProgressBar-kind widgets.
+    ProgressBar(ProgressBarProps),
 }
 
 impl ComponentPayload {
@@ -345,11 +392,15 @@ impl ComponentPayload {
         match self {
             ComponentPayload::Transform(_) => "transform",
             ComponentPayload::Style(_) => "style",
-            ComponentPayload::Layout(_) => "layout",
+            ComponentPayload::LayoutDownward(_) => "layout_downward",
+            ComponentPayload::LayoutUpward(_) => "layout_upward",
             ComponentPayload::Text(_) => "text",
             ComponentPayload::Image(_) => "image",
             ComponentPayload::Interaction(_) => "interaction",
             ComponentPayload::Include(_) => "include",
+            ComponentPayload::Button(_) => "button",
+            ComponentPayload::Checkbox(_) => "checkbox",
+            ComponentPayload::ProgressBar(_) => "progressbar",
         }
     }
 }
@@ -453,20 +504,67 @@ impl Default for StyleProps {
 }
 
 // ---------------------------------------------------------------------------
-// Layout Component (flex container layout)
+// Layout Components (split in v4 — see `beui_protocol::layout` module)
 // ---------------------------------------------------------------------------
 
-/// Flex container layout (mirrors Bevy's UI flex API). Optional — only
-/// containers that need to lay out children need it. A widget without
-/// a `layout` component has `position: absolute` semantics (its
-/// `transform.position` is interpreted in the parent's coordinate
-/// space).
+/// Layout type selected by the user in the inspector. Determines how
+/// this widget arranges its children (the "downward" direction).
+///
+/// `None` is a layout type with full visibility — it does NOT hide the
+/// widget. Visibility lives in the editor's overrides store. See the
+/// `beui_protocol::layout` module for the rendering rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum LayoutType {
+    /// No flex layout applied to children. Still a visible container —
+    /// children are positioned by their `transform.position` + size.
+    /// This is the default for leaf-kind widgets.
+    #[default]
+    None,
+    /// Horizontal row (left-to-right by default).
+    Horizontal,
+    /// Vertical column (top-to-bottom by default).
+    Vertical,
+    /// Reserved for v2. The v1 placeholder uses Horizontal math —
+    /// the type is selectable so user assets round-trip cleanly when
+    /// v2 lands.
+    Grid,
+}
+
+/// Whether a child of a flex container positions itself according to
+/// the parent's flex flow (`Inherit`) or escapes it to be positioned
+/// absolutely by its `transform` (`Ignore`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum LayoutUpwardMode {
+    /// Participate in the parent's flex flow (default).
+    #[default]
+    Inherit,
+    /// Escape the parent's flex flow — render at `transform.position`
+    /// relative to the parent's content box.
+    Ignore,
+}
+
+/// Downward layout payload — describes how THIS widget arranges ITS
+/// children. Authored via the Inspector's "Downward" tab. Internal
+/// fields like `flex_direction` / `justify_content` / `align_items`
+/// are derived from `type_` (the user's Type selection) and rarely
+/// surfaced in the UI.
+///
+/// The four-spacing / margin / flex_shrink fields are direct inputs
+/// to Bevy's `Node` API. The mapping from these props to Bevy types
+/// is centralized in `beui_protocol::layout::layout_to_flex` — every
+/// consumer MUST route its adapter through that function rather than
+/// re-implementing the math.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
-pub struct LayoutProps {
-    /// Box model: flex or none.
-    #[serde(default = "default_display")]
-    pub display: Display,
-    /// Main axis direction.
+pub struct LayoutDownwardProps {
+    /// The user-selected layout type. Drives flex_direction /
+    /// justify_content / align_items defaults.
+    #[serde(default)]
+    pub type_: LayoutType,
+    /// Main axis direction. `Row` for `Horizontal`, `Column` for
+    /// `Vertical`; `type_` of `None` or `Grid` uses `Row` as a
+    /// safe default.
     #[serde(default = "default_flex_direction")]
     pub flex_direction: FlexDirection,
     /// Main-axis child alignment.
@@ -481,7 +579,9 @@ pub struct LayoutProps {
     /// Inner padding (top/right/bottom/left).
     #[serde(default)]
     pub padding: Padding,
-    /// Outer margin (top/right/bottom/left).
+    /// Outer margin (top/right/bottom/left). Note: in Bevy 0.19 +
+    /// taffy the margin is on the node; a future CSS-style `margin`
+    /// collapse is out of scope.
     #[serde(default)]
     pub margin: Margin,
     /// Flex shrink factor. `1.0` (the default) matches Bevy 0.19's
@@ -490,36 +590,39 @@ pub struct LayoutProps {
     /// is too small to fit all children, taffy reduces the child's
     /// main extent proportionally. A `0` disables shrinking (children
     /// overflow the container instead of squishing).
-    ///
-    /// Phase 6 added this field; legacy assets without it parse to
-    /// `1.0` (Bevy-compatible default) via `#[serde(default)]`.
     #[serde(default = "default_flex_shrink")]
     pub flex_shrink: f32,
-    /// Optional absolute position. When `Some`, the widget is laid out
-    /// at the given offset in the parent's content box (ignores flex).
+}
+
+/// Upward layout payload — describes how THIS widget positions itself
+/// relative to the parent's flex flow.
+///
+/// `Inherit` (default) means the widget participates in the parent's
+/// flex arrangement; `Ignore` means it escapes the flow and renders at
+/// its `transform.position` in the parent's content box. This replaces
+/// the v3 `LayoutProps::position: Option<AbsolutePosition>` field — the
+/// user only needs to flip a switch, not specify absolute coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct LayoutUpwardProps {
+    /// Whether the child participates in the parent's flex flow.
     #[serde(default)]
-    pub position: Option<AbsolutePosition>,
-}
-
-fn default_flex_shrink() -> f32 {
-    1.0
-}
-
-fn default_display() -> Display {
-    Display::Flex
-}
-fn default_flex_direction() -> FlexDirection {
-    FlexDirection::Row
+    pub mode: LayoutUpwardMode,
 }
 
 /// Box model: `Flex` lays out children according to flex rules; `None`
 /// hides the widget and skips its subtree.
+///
+/// **Wire compatibility note.** The `None` variant is retained for
+/// future flexibility, but `beui_protocol::layout::layout_to_flex`
+/// never returns it (hidden-ness is a separate concern owned by the
+/// editor's overrides store). Consumers MUST also refuse to set
+/// `Display::None` or `Visibility::Hidden` based on `LayoutDownward`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Display {
     /// Flex container that lays out children.
     #[default]
     Flex,
-    /// Not rendered (display: none).
+    /// Not rendered (display: none). NOT emitted by `layout_to_flex`.
     None,
 }
 
@@ -598,14 +701,46 @@ pub struct Margin {
     pub left: f32,
 }
 
-/// Absolute position override. When set on a `LayoutProps`, the widget
-/// is positioned at `(x, y)` in the parent's content box, ignoring flex.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
-pub struct AbsolutePosition {
-    /// Horizontal offset from the parent's content-box origin, in pixels.
-    pub x: f32,
-    /// Vertical offset from the parent's content-box origin, in pixels.
-    pub y: f32,
+/// Output bundle from `beui_protocol::layout::layout_to_flex`.
+///
+/// Holds the four flex-container fields a Bevy `Node` needs to be a
+/// flex container (display, flex_direction, justify_content,
+/// align_items). The other fields from `LayoutDownwardProps` (gap,
+/// padding, margin, flex_shrink) are applied separately.
+///
+/// This struct exists so the layout module has a type that means
+/// "these four values, together, define a flex container" — a single
+/// name rather than 4-arg lists at every adapter call site.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlexInputs {
+    /// Box model. `layout_to_flex` always produces `Display::Flex`
+    /// regardless of `LayoutType` (hidden-ness invariant).
+    pub display: Display,
+    /// Main axis direction.
+    pub flex_direction: FlexDirection,
+    /// Main-axis child alignment.
+    pub justify_content: JustifyContent,
+    /// Cross-axis child alignment.
+    pub align_items: AlignItems,
+}
+
+impl Default for FlexInputs {
+    fn default() -> Self {
+        Self {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::FlexStart,
+            align_items: AlignItems::Stretch,
+        }
+    }
+}
+
+fn default_flex_shrink() -> f32 {
+    1.0
+}
+
+fn default_flex_direction() -> FlexDirection {
+    FlexDirection::Row
 }
 
 // ---------------------------------------------------------------------------
@@ -781,4 +916,200 @@ fn default_true() -> bool {
 pub struct IncludeProps {
     /// Source path, e.g. `"_shared/menu-panel.beui"`.
     pub source: String,
+}
+
+// ---------------------------------------------------------------------------
+// Button Component (Button widgets)
+// ---------------------------------------------------------------------------
+
+/// Button-specific payload: label string + face color. Lives on
+/// `Button`-kind widgets. The Bevy 0.19 spawner renders the label as a
+/// `Text` bundle (the same path `TextProps` uses) and overrides the
+/// entity's `BackgroundColor` with `color` so the face is visible.
+///
+/// The label is required (non-optional) so freshly-created Button
+/// payloads always render something visible — `#[serde(default)]`
+/// falls back to `"Button"`. The editor's `ButtonSection` mirrors this
+/// shape; the inspector edits `label` and `color` and emits a partial
+/// patch through `applyComponentsPatch`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ButtonProps {
+    /// The literal text the button displays. Defaults to `"Button"`.
+    #[serde(default = "default_button_label")]
+    pub label: String,
+    /// Face color (sRGB u8 0-255). Defaults to a medium grey so a
+    /// freshly-dropped Button has a non-transparent face without the
+    /// inspector round-trip needing a color commit first.
+    #[serde(default = "default_button_color")]
+    pub color: Color,
+    /// Pointer-hover face color (sRGB u8 0-255). Defaults to a
+    /// lighter shade so the hover feedback is visible against `color`
+    /// without the user configuring it first. Bevy-side override
+    /// applied by the interaction component's `hovered` state.
+    #[serde(default = "default_button_hover_color")]
+    pub hover_color: Color,
+    /// Pointer-pressed face color (sRGB u8 0-255). Defaults to a
+    /// darker shade so the press feedback is visible against `color`
+    /// without the user configuring it first.
+    #[serde(default = "default_button_pressed_color")]
+    pub pressed_color: Color,
+    /// Face color while the button is disabled (sRGB u8 0-255, alpha
+    /// typically <255 to read as "muted"). Defaults to a 50% gray
+    /// so the disabled state is unmistakable without further config.
+    #[serde(default = "default_button_disabled_color")]
+    pub disabled_color: Color,
+    /// Whether the button is currently disabled. Disabled buttons
+    /// suppress click dispatch in Bevy and show `disabled_color`.
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+fn default_button_label() -> String {
+    "Button".to_string()
+}
+
+fn default_button_color() -> Color {
+    Color {
+        r: 60,
+        g: 60,
+        b: 60,
+        a: 255,
+    }
+}
+
+fn default_button_hover_color() -> Color {
+    Color {
+        r: 90,
+        g: 90,
+        b: 90,
+        a: 255,
+    }
+}
+
+fn default_button_pressed_color() -> Color {
+    Color {
+        r: 30,
+        g: 30,
+        b: 30,
+        a: 255,
+    }
+}
+
+fn default_button_disabled_color() -> Color {
+    Color {
+        r: 128,
+        g: 128,
+        b: 128,
+        a: 128,
+    }
+}
+
+impl Default for ButtonProps {
+    fn default() -> Self {
+        Self {
+            label: default_button_label(),
+            color: default_button_color(),
+            hover_color: default_button_hover_color(),
+            pressed_color: default_button_pressed_color(),
+            disabled_color: default_button_disabled_color(),
+            disabled: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Checkbox Component (Checkbox widgets)
+// ---------------------------------------------------------------------------
+
+/// Checkbox-specific payload: toggled state + accent color. Lives on
+/// `Checkbox`-kind widgets. Bevy 0.19's `bevy_ui_widgets::Checkbox`
+/// component is a marker; the toggled state is carried by
+/// `bevy_ui_widgets::Checked { checked, .. }` — the spawner reads
+/// `checked` from this payload and inserts both components on the
+/// entity. `color` controls the box fill / accent so the user can
+/// theme checkboxes without touching the parent container's fill.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckboxProps {
+    /// Whether the checkbox is currently checked. Default `false`.
+    #[serde(default)]
+    pub checked: bool,
+    /// Box accent color (sRGB u8 0-255). Default a mid blue so the
+    /// freshly-dropped widget has a visible face.
+    #[serde(default = "default_checkbox_color")]
+    pub color: Color,
+}
+
+fn default_checkbox_color() -> Color {
+    Color {
+        r: 80,
+        g: 160,
+        b: 240,
+        a: 255,
+    }
+}
+
+impl Default for CheckboxProps {
+    fn default() -> Self {
+        Self {
+            checked: false,
+            color: default_checkbox_color(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ProgressBar Component (ProgressBar widgets)
+// ---------------------------------------------------------------------------
+
+/// ProgressBar-specific payload: fill ratio + fill color + label
+/// visibility. Lives on `ProgressBar`-kind widgets. Bevy 0.19 has no
+/// built-in progress-bar primitive, so the spawner renders a
+/// `Container`-shaped Node as the track and spawns a CHILD entity
+/// sized by `value` (Percent of the track width) carrying the
+/// `BackgroundColor` for the fill. `show_label` is preserved but
+/// not yet wired through Bevy (a follow-up may overlay a centered
+/// `Text` showing `"75 %"`).
+///
+/// `value` is clamped to `[0.0, 1.0]` at render time — values outside
+/// the range collapse to the nearer edge instead of overflowing or
+/// rendering negative-space fills.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProgressBarProps {
+    /// Fill ratio in `0.0..=1.0`. Default `0.5` (half-full).
+    #[serde(default = "default_progressbar_value")]
+    pub value: f32,
+    /// Fill color (sRGB u8 0-255). Default a mid green so the
+    /// freshly-dropped widget has a visible fill against any track
+    /// background.
+    #[serde(default = "default_progressbar_color")]
+    pub color: Color,
+    /// Whether to overlay a centered percent label. Default `false`.
+    /// Stored on disk and round-trips through the asset, but the
+    /// Bevy spawner does not yet draw the label — see the struct
+    /// doc for the wiring plan.
+    #[serde(default)]
+    pub show_label: bool,
+}
+
+fn default_progressbar_value() -> f32 {
+    0.5
+}
+
+fn default_progressbar_color() -> Color {
+    Color {
+        r: 80,
+        g: 200,
+        b: 120,
+        a: 255,
+    }
+}
+
+impl Default for ProgressBarProps {
+    fn default() -> Self {
+        Self {
+            value: default_progressbar_value(),
+            color: default_progressbar_color(),
+            show_label: false,
+        }
+    }
 }

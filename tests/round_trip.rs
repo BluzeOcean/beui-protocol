@@ -7,8 +7,9 @@
 
 use beui_protocol::{
     empty_asset, load_from_str, round_trip, save_to_string, Color, ComponentPayload,
-    CURRENT_SCHEMA_VERSION, ImageFit, ImageProps, IncludeProps, InteractionProps, LayoutProps,
-    StyleProps, TextProps, TransformProps, UiDefinitionAsset, Val, WidgetKind, WidgetNode,
+    CURRENT_SCHEMA_VERSION, ImageFit, ImageProps, IncludeProps, InteractionProps,
+    LayoutDownwardProps, LayoutUpwardProps, StyleProps, TextProps, TransformProps,
+    UiDefinitionAsset, Val, WidgetKind, WidgetNode,
 };
 use std::collections::BTreeMap;
 
@@ -28,6 +29,7 @@ fn painted(asset: &mut UiDefinitionAsset) {
             rotation: 15.0,
             scale: beui_protocol::Scale { x: 2.0, y: 1.0 },
             flip: beui_protocol::Flip { x: false, y: true },
+            z_index: 0,
         }),
     );
     child_components.insert(
@@ -112,8 +114,12 @@ fn all_component_payload_variants_deserialize() {
         ComponentPayload::Style(StyleProps::default()),
     );
     components.insert(
-        "layout".into(),
-        ComponentPayload::Layout(LayoutProps::default()),
+        "layout_downward".into(),
+        ComponentPayload::LayoutDownward(LayoutDownwardProps::default()),
+    );
+    components.insert(
+        "layout_upward".into(),
+        ComponentPayload::LayoutUpward(LayoutUpwardProps::default()),
     );
     components.insert(
         "text".into(),

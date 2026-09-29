@@ -17,8 +17,8 @@
 //! struct — every consumer should use the v3 schema directly.
 
 use beui_protocol::{
-    save_to_file, ComponentPayload, IncludeProps, InteractionProps, LayoutProps, TextProps,
-    UiDefinitionAsset, WidgetKind,
+    save_to_file, ComponentPayload, IncludeProps, InteractionProps, LayoutDownwardProps,
+    LayoutUpwardProps, TextProps, UiDefinitionAsset, WidgetKind,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -52,6 +52,8 @@ struct V1Node {
     /// trick as `layout`.
     #[serde(default)]
     style: Option<V1Style>,
+    #[serde(default)]
+    layout: Option<V1Layout>,
     #[serde(default)]
     interaction: Option<V1Interaction>,
     #[serde(default)]
@@ -204,6 +206,7 @@ fn upgrade(v1: V1Node, is_root: bool) -> beui_protocol::WidgetNode {
         rotation: 0.0,
         scale: beui_protocol::Scale { x: 1.0, y: 1.0 },
         flip: beui_protocol::Flip::default(),
+        z_index: 0,
     };
     components.insert("transform".into(), ComponentPayload::Transform(transform));
 
@@ -237,15 +240,24 @@ fn upgrade(v1: V1Node, is_root: bool) -> beui_protocol::WidgetNode {
     };
     components.insert("style".into(), ComponentPayload::Style(style));
 
-    // layout (optional)
+    // layout (optional) — v4 splits the old `Layout` payload into
+    // `LayoutDownward` + `LayoutUpward`. We emit only the downward
+    // payload here because the v1 fixture has no upward semantics to
+    // carry over.
     if let Some(l) = v1.layout {
         if l.gap != 0.0 || l.width.is_some() || l.height.is_some() {
             // Only emit a layout component when meaningful data was
             // present. A pure-pass-through layout with no gap, width,
             // or height is equivalent to no layout component.
             components.insert(
-                "layout".into(),
-                ComponentPayload::Layout(LayoutProps::default()),
+                "layout_downward".into(),
+                ComponentPayload::LayoutDownward(LayoutDownwardProps::default()),
+            );
+            // Mirror the historical upward default so consumers that
+            // do `is_under_parent_layout` see the same behavior.
+            components.insert(
+                "layout_upward".into(),
+                ComponentPayload::LayoutUpward(LayoutUpwardProps::default()),
             );
             let _ = l; // silence unused
         }

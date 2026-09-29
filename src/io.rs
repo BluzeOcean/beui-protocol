@@ -52,13 +52,20 @@ pub fn load_from_str(text: &str) -> Result<UiDefinitionAsset, ProtocolError> {
     // is just a `//` comment so `ron` itself will ignore it; we
     // extract it first so we can verify it matches the body's version.
     let (header_version, body) = split_header(text)?;
-    let asset: UiDefinitionAsset = parse_ron(body).map_err(|e| match e {
-        ProtocolError::RonParse { message, position } => ProtocolError::RonParse {
-            message,
-            position,
-        },
-        other => other,
-    })?;
+    // 2. Branch on the on-disk schema version. v4 inputs parse
+    // directly into the canonical `UiDefinitionAsset`. v3 (and
+    // earlier) inputs MUST shadow-parse through the v3-shadow types
+    // because the v4 `ComponentPayload` enum dropped the legacy
+    // `Layout` variant — wire-compatible from the perspective of
+    // Transform / Style / Text / Image / Interaction / Include, but
+    // NOT for `Layout`, which this crate silently routes through the
+    // shadow parse to keep load paths symmetric.
+    let asset: UiDefinitionAsset = match header_version {
+        Some(v) if v < crate::migrate::CURRENT_SCHEMA_VERSION => {
+            crate::migrate::parse_v3_into_v4(body)?
+        }
+        _ => parse_ron(body)?,
+    };
     if let Some(hv) = header_version {
         if hv != asset.version {
             return Err(ProtocolError::BadHeader {
@@ -144,10 +151,6 @@ pub fn empty_asset() -> UiDefinitionAsset {
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
-
-fn default_ron_options() -> PrettyConfig {
-    PrettyConfig::default()
-}
 
 /// Strip the leading `// schema_version: N\n` header (if present) and
 /// return the version + the remaining RON body. RON itself ignores

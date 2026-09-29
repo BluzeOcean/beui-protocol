@@ -33,9 +33,19 @@
 //! - [`WidgetNode`] — a tree node with `components: { ... }`.
 //! - [`WidgetKind`] — closed enum of widget kinds.
 //! - [`ComponentPayload`] — tagged enum of every component type.
-//! - [`TransformProps`], [`StyleProps`], [`LayoutProps`], [`TextProps`],
+//! - [`TransformProps`], [`StyleProps`], [`TextProps`],
 //!   [`ImageProps`], [`InteractionProps`], [`IncludeProps`] — the
 //!   payload structs.
+//! - [`LayoutDownwardProps`], [`LayoutUpwardProps`] — the split layout
+//!   payloads (see [`layout`] module for the reference math).
+//!
+//! ### Layout reference functions
+//! - [`layout::layout_to_flex`] — project a `LayoutDownwardProps`
+//!   into a `FlexInputs` bundle. Always returns `Display::Flex`.
+//! - [`layout::is_under_parent_layout`] — true iff a child participates
+//!   in its parent's flex flow.
+//! - [`layout::extract_layout_downward`] / [`layout::extract_layout_upward`]
+//!   — extractors that match either component presence or absence.
 //!
 //! ### Constants
 //! - [`migrate::CURRENT_SCHEMA_VERSION`] — `3`.
@@ -62,6 +72,7 @@
 
 pub mod error;
 pub mod io;
+pub mod layout;
 pub mod migrate;
 pub mod schema;
 pub mod validate;
@@ -70,11 +81,13 @@ pub use error::ProtocolError;
 pub use io::{
     empty_asset, load_from_file, load_from_str, round_trip, save_to_file, save_to_string,
 };
+pub use layout::{extract_layout_downward, extract_layout_upward, is_under_parent_layout, layout_to_flex};
 pub use migrate::{CURRENT_SCHEMA_VERSION, MIN_SUPPORTED_VERSION};
 pub use schema::{
-    AbsolutePosition, AlignItems, Color, ComponentPayload, Display, Flip, FlexDirection,
-    ImageFit, ImageProps, IncludeProps, InteractionProps, JustifyContent, LayoutProps, Margin,
-    Padding, PositionVal, Scale, SizeVal, SliceInsets, StyleProps, TextAlign, TextProps,
+    AlignItems, ButtonProps, CheckboxProps, Color, ComponentPayload, Display, FlexDirection,
+    FlexInputs, Flip, ImageFit, ImageProps, IncludeProps, InteractionProps, JustifyContent,
+    LayoutDownwardProps, LayoutType, LayoutUpwardMode, LayoutUpwardProps, Margin, Padding,
+    PositionVal, ProgressBarProps, Scale, SizeVal, SliceInsets, StyleProps, TextAlign, TextProps,
     ThemeRef, TransformProps, UiDefinitionAsset, Val, WidgetKind, WidgetNode,
 };
 pub use validate::validate;
